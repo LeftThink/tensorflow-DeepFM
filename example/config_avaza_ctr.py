@@ -1,6 +1,6 @@
 
 # set the path-to-files
-TRAIN_FILE = "/data/ChuiGeDaQiQiu/avaza-ctr-2015/train.csv"
+TRAIN_FILE = "/data/ChuiGeDaQiQiu/avaza-ctr-2015/train_5000000.csv"
 TEST_FILE = "/data/ChuiGeDaQiQiu/avaza-ctr-2015/test.csv"
 
 SUB_DIR = "/data/ChuiGeDaQiQiu/avaza-ctr-2015"

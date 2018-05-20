@@ -73,7 +73,8 @@ class DataParser(object):
         assert not ((infile is not None) and (df is not None)), "only one can be set"
 
         if infile is None:
-            dfi = df.copy() #注意这里做了一个拷贝
+            #dfi = df.copy() #注意这里做了一个拷贝
+            dfi = df
         else:
             dfi = pd.read_csv(infile)
         if has_label:

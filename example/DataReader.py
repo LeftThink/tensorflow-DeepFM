@@ -1,3 +1,5 @@
+
+#-*- coding: utf-8 -*-
 """
 A data parser for Porto Seguro's Safe Driver Prediction competition's dataset.
 URL: https://www.kaggle.com/c/porto-seguro-safe-driver-prediction
@@ -29,7 +31,9 @@ class FeatureDictionary(object):
             dfTest = pd.read_csv(self.testfile)
         else:
             dfTest = self.dfTest
-        df = pd.concat([dfTrain, dfTest])
+
+        #将训练和测试集做一下拼接
+        df = pd.concat([dfTrain, dfTest]) 
         self.feat_dict = {}
         tc = 0
         for col in df.columns:
@@ -37,12 +41,26 @@ class FeatureDictionary(object):
                 continue
             if col in self.numeric_cols:
                 # map to a single index
+                # 对于数值型特征只映射到一个index
                 self.feat_dict[col] = tc
                 tc += 1
             else:
+                #对于类别性特征,根据类别数对就到c个索引
                 us = df[col].unique()
                 self.feat_dict[col] = dict(zip(us, range(tc, len(us)+tc)))
                 tc += len(us)
+        """
+        tc, ex:
+        {
+            'fe1': 0, #因为是数值型特征
+            'fe2': {  #因为是类别型特征,而且有3个类别
+                'c21': 1,
+                'c22': 2,
+                'c23': 3
+            },
+            ...
+        }
+        """
         self.feat_dim = tc
 
 
@@ -53,32 +71,38 @@ class DataParser(object):
     def parse(self, infile=None, df=None, has_label=False):
         assert not ((infile is None) and (df is None)), "infile or df at least one is set"
         assert not ((infile is not None) and (df is not None)), "only one can be set"
+
         if infile is None:
-            dfi = df.copy()
+            dfi = df.copy() #注意这里做了一个拷贝
         else:
             dfi = pd.read_csv(infile)
         if has_label:
-            y = dfi["target"].values.tolist()
-            dfi.drop(["id", "target"], axis=1, inplace=True)
+            #y = dfi["target"].values.tolist()
+            #dfi.drop(["id", "target"], axis=1, inplace=True)
+            y = dfi["click"].values.tolist()
+            dfi.drop(["id", "click"], axis=1, inplace=True)
         else:
             ids = dfi["id"].values.tolist()
             dfi.drop(["id"], axis=1, inplace=True)
         # dfi for feature index
         # dfv for feature value which can be either binary (1/0) or float (e.g., 10.24)
-        dfv = dfi.copy()
+        dfv = dfi.copy() #真是不惜内存啊,就你这两个拷贝我还跑个毛啊
         for col in dfi.columns:
             if col in self.feat_dict.ignore_cols:
+                #要忽略的特征直接丢弃
                 dfi.drop(col, axis=1, inplace=True)
                 dfv.drop(col, axis=1, inplace=True)
                 continue
             if col in self.feat_dict.numeric_cols:
+                #数值型特征直接相当于直接编码为訪特征对应的一个固定的索引
                 dfi[col] = self.feat_dict.feat_dict[col]
             else:
+                #类别型特征做一个映射,因为每个类别会对应到一个不同的索引
                 dfi[col] = dfi[col].map(self.feat_dict.feat_dict[col])
-                dfv[col] = 1.
+                dfv[col] = 1. #类别型特征设为1,数值型特征仍然为原始值
 
         # list of list of feature indices of each sample in the dataset
-        Xi = dfi.values.tolist()
+        Xi = dfi.values.tolist() #变成了一个MxN的list
         # list of list of feature values of each sample in the dataset
         Xv = dfv.values.tolist()
         if has_label:

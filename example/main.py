@@ -1,4 +1,5 @@
 
+#-*- coding: utf-8 -*-
 import os
 import sys
 
@@ -9,14 +10,33 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import StratifiedKFold
 
-import config
+#import config
+import config_avaza_ctr as config 
 from metrics import gini_norm
 from DataReader import FeatureDictionary, DataParser
 sys.path.append("..")
 from DeepFM import DeepFM
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 gini_scorer = make_scorer(gini_norm, greater_is_better=True, needs_proba=True)
 
+
+def _load_avazu_ctr_data():
+    dfTrain = pd.read_csv(config.TRAIN_FILE)
+    dfTest = pd.read_csv(config.TEST_FILE)
+
+    cols = [c for c in dfTrain.columns if c not in ["id", "click"]]
+    cols = [c for c in cols if (not c in config.IGNORE_COLS)]
+
+    X_train = dfTrain[cols].values
+    y_train = dfTrain["click"].values
+    X_test = dfTest[cols].values
+    ids_test = dfTest["id"].values #测试集的id列表
+    cat_features_indices = [i for i,c in enumerate(cols) if c in config.CATEGORICAL_COLS]
+    print("load data finished")
+
+    return dfTrain, dfTest, X_train, y_train, X_test, ids_test, cat_features_indices
 
 def _load_data():
 
@@ -25,11 +45,14 @@ def _load_data():
 
     def preprocess(df):
         cols = [c for c in df.columns if c not in ["id", "target"]]
+        #计算第个样本中为-1的特征数量
         df["missing_feat"] = np.sum((df[cols] == -1).values, axis=1)
+        #啥? 
         df["ps_car_13_x_ps_reg_03"] = df["ps_car_13"] * df["ps_reg_03"]
         return df
 
-    dfTrain = preprocess(dfTrain)
+    #反正这么一弄新增了两个特征
+    dfTrain = preprocess(dfTrain) 
     dfTest = preprocess(dfTest)
 
     cols = [c for c in dfTrain.columns if c not in ["id", "target"]]
@@ -38,7 +61,7 @@ def _load_data():
     X_train = dfTrain[cols].values
     y_train = dfTrain["target"].values
     X_test = dfTest[cols].values
-    ids_test = dfTest["id"].values
+    ids_test = dfTest["id"].values #测试集的id列表
     cat_features_indices = [i for i,c in enumerate(cols) if c in config.CATEGORICAL_COLS]
 
     return dfTrain, dfTest, X_train, y_train, X_test, ids_test, cat_features_indices
@@ -49,22 +72,34 @@ def _run_base_model_dfm(dfTrain, dfTest, folds, dfm_params):
                            numeric_cols=config.NUMERIC_COLS,
                            ignore_cols=config.IGNORE_COLS)
     data_parser = DataParser(feat_dict=fd)
+
+    """
+    Xi_x是一个n_samples x n_features的索引list,每个数值型特征编码为一个固定索引,每个类别型特征根据类别
+    数编码为不同的索引
+    Xv_x是一个n_samples x n_features的值list
+    """
     Xi_train, Xv_train, y_train = data_parser.parse(df=dfTrain, has_label=True)
     Xi_test, Xv_test, ids_test = data_parser.parse(df=dfTest)
+    print("parse data finished")
 
-    dfm_params["feature_size"] = fd.feat_dim
-    dfm_params["field_size"] = len(Xi_train[0])
+    dfm_params["feature_size"] = fd.feat_dim #最大索引
+    dfm_params["field_size"] = len(Xi_train[0]) #特征数,这个还是原始的特征数
 
     y_train_meta = np.zeros((dfTrain.shape[0], 1), dtype=float)
     y_test_meta = np.zeros((dfTest.shape[0], 1), dtype=float)
+
     _get = lambda x, l: [x[i] for i in l]
     gini_results_cv = np.zeros(len(folds), dtype=float)
     gini_results_epoch_train = np.zeros((len(folds), dfm_params["epoch"]), dtype=float)
     gini_results_epoch_valid = np.zeros((len(folds), dfm_params["epoch"]), dtype=float)
+
+    #train_idx和valid_idx分别是训练集和验证集的idx,因为做了kfold所以下面要从
+    #全样本中根据idx提取出来
     for i, (train_idx, valid_idx) in enumerate(folds):
         Xi_train_, Xv_train_, y_train_ = _get(Xi_train, train_idx), _get(Xv_train, train_idx), _get(y_train, train_idx)
         Xi_valid_, Xv_valid_, y_valid_ = _get(Xi_train, valid_idx), _get(Xv_train, valid_idx), _get(y_train, valid_idx)
 
+        print("fit, fold=%d" % i)
         dfm = DeepFM(**dfm_params)
         dfm.fit(Xi_train_, Xv_train_, y_train_, Xi_valid_, Xv_valid_, y_valid_)
 
@@ -84,17 +119,20 @@ def _run_base_model_dfm(dfTrain, dfTest, folds, dfm_params):
         clf_str = "FM"
     elif dfm_params["use_deep"]:
         clf_str = "DNN"
+
     print("%s: %.5f (%.5f)"%(clf_str, gini_results_cv.mean(), gini_results_cv.std()))
+
     filename = "%s_Mean%.5f_Std%.5f.csv"%(clf_str, gini_results_cv.mean(), gini_results_cv.std())
     _make_submission(ids_test, y_test_meta, filename)
 
-    _plot_fig(gini_results_epoch_train, gini_results_epoch_valid, clf_str)
+    # 暂时不画图了
+    #_plot_fig(gini_results_epoch_train, gini_results_epoch_valid, clf_str)
 
     return y_train_meta, y_test_meta
 
 
 def _make_submission(ids, y_pred, filename="submission.csv"):
-    pd.DataFrame({"id": ids, "target": y_pred.flatten()}).to_csv(
+    pd.DataFrame({"id": ids, "click": y_pred.flatten()}).to_csv(
         os.path.join(config.SUB_DIR, filename), index=False, float_format="%.5f")
 
 
@@ -117,9 +155,13 @@ def _plot_fig(train_results, valid_results, model_name):
 
 
 # load data
-dfTrain, dfTest, X_train, y_train, X_test, ids_test, cat_features_indices = _load_data()
+# dfTrain, dfTest, X_train, y_train, X_test, ids_test, cat_features_indices = _load_data()
+dfTrain, dfTest, X_train, y_train, X_test, ids_test, cat_features_indices = _load_avazu_ctr_data()
 
-# folds
+"""
+folds, provide train/test indices to split data in train/test sets, ex:
+[(array(1,3,4), array(2,5)), (array(1,2,5), array(3,4)), ...]
+"""
 folds = list(StratifiedKFold(n_splits=config.NUM_SPLITS, shuffle=True,
                              random_state=config.RANDOM_SEED).split(X_train, y_train))
 
@@ -147,6 +189,7 @@ dfm_params = {
 }
 y_train_dfm, y_test_dfm = _run_base_model_dfm(dfTrain, dfTest, folds, dfm_params)
 
+"""
 # ------------------ FM Model ------------------
 fm_params = dfm_params.copy()
 fm_params["use_deep"] = False
@@ -157,6 +200,7 @@ y_train_fm, y_test_fm = _run_base_model_dfm(dfTrain, dfTest, folds, fm_params)
 dnn_params = dfm_params.copy()
 dnn_params["use_fm"] = False
 y_train_dnn, y_test_dnn = _run_base_model_dfm(dfTrain, dfTest, folds, dnn_params)
+"""
 
 
 

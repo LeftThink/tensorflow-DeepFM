@@ -1,3 +1,5 @@
+
+#-*- coding: utf-8 -*-
 """
 Tensorflow implementation of DeepFM [1]
 
@@ -5,14 +7,13 @@ Reference:
 [1] DeepFM: A Factorization-Machine based Neural Network for CTR Prediction,
     Huifeng Guo, Ruiming Tang, Yunming Yey, Zhenguo Li, Xiuqiang He.
 """
-
 import numpy as np
 import tensorflow as tf
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.metrics import roc_auc_score
 from time import time
 from tensorflow.contrib.layers.python.layers import batch_norm as batch_norm
-from yellowfin import YFOptimizer
+#from yellowfin import YFOptimizer 
 
 
 class DeepFM(BaseEstimator, TransformerMixin):
@@ -36,17 +37,17 @@ class DeepFM(BaseEstimator, TransformerMixin):
         self.embedding_size = embedding_size    # denote as K, size of the feature embedding
 
         self.dropout_fm = dropout_fm
-        self.deep_layers = deep_layers
-        self.dropout_deep = dropout_deep
-        self.deep_layers_activation = deep_layers_activation
-        self.use_fm = use_fm
-        self.use_deep = use_deep
-        self.l2_reg = l2_reg
+        self.deep_layers = deep_layers          #深度
+        self.dropout_deep = dropout_deep        #啥?
+        self.deep_layers_activation = deep_layers_activation #激活函数,通常是relu
+        self.use_fm = use_fm                    #什么鬼?
+        self.use_deep = use_deep                #又什么鬼?
+        self.l2_reg = l2_reg                    #用在哪?
 
         self.epoch = epoch
         self.batch_size = batch_size
         self.learning_rate = learning_rate
-        self.optimizer_type = optimizer_type
+        self.optimizer_type = optimizer_type    #优化器,Adam or 梯度下降
 
         self.batch_norm = batch_norm
         self.batch_norm_decay = batch_norm_decay
@@ -63,34 +64,44 @@ class DeepFM(BaseEstimator, TransformerMixin):
 
     def _init_graph(self):
         self.graph = tf.Graph()
-        with self.graph.as_default():
+        with self.graph.as_default(): #在self.graph这个图下操作
 
             tf.set_random_seed(self.random_seed)
 
             self.feat_index = tf.placeholder(tf.int32, shape=[None, None],
-                                                 name="feat_index")  # None * F
+                                                 name="feat_index")  
             self.feat_value = tf.placeholder(tf.float32, shape=[None, None],
-                                                 name="feat_value")  # None * F
+                                                 name="feat_value")  
             self.label = tf.placeholder(tf.float32, shape=[None, 1], name="label")  # None * 1
             self.dropout_keep_fm = tf.placeholder(tf.float32, shape=[None], name="dropout_keep_fm")
             self.dropout_keep_deep = tf.placeholder(tf.float32, shape=[None], name="dropout_keep_deep")
             self.train_phase = tf.placeholder(tf.bool, name="train_phase")
 
+            # 初始化权重
             self.weights = self._initialize_weights()
 
             # model
-            self.embeddings = tf.nn.embedding_lookup(self.weights["feature_embeddings"],
-                                                             self.feat_index)  # None * F * K
+            # 根据feat_index选择对应的weights['feature_embeddings']中的embedding值
+            # self.weights['feature_embeddings']的shape是MxK
+            self.embeddings = tf.nn.embedding_lookup(self.weights["feature_embeddings"], self.feat_index)
+
             feat_value = tf.reshape(self.feat_value, shape=[-1, self.field_size, 1])
+            # tf.multiply是矩阵对应元素相乘即点乘,为什么是这样呢?你必需对DeepFM的
+            # 结构有一个清晰的认识,输入层到embedding层并不是一个整体的网络,而是被分割成了field_size个
+            # 子网络,每个子网络中有效的输入实际上只有一位,其它位要么没有要么就是0(想想one-hot编码),所以
+            # 你就是在用这个有效一位去乘以权重就可以了,这里可以看作是一个权重选择的过程
             self.embeddings = tf.multiply(self.embeddings, feat_value)
 
             # ---------- first order term ----------
+            # 一阶, feature_bias不是偏置,是说的一阶的系数,也就是那个W
             self.y_first_order = tf.nn.embedding_lookup(self.weights["feature_bias"], self.feat_index) # None * F * 1
+            # 注意这里W和X用的是点乘,所以还要再做一个加和 
             self.y_first_order = tf.reduce_sum(tf.multiply(self.y_first_order, feat_value), 2)  # None * F
             self.y_first_order = tf.nn.dropout(self.y_first_order, self.dropout_keep_fm[0]) # None * F
 
             # ---------- second order term ---------------
-            # sum_square part
+            # sum_square part, tf.reduce_mean表示求平均,参数1表示第1维,也就是按行求平均
+            # 要看懂这部分内容必须了解FM中的二次项化简后的形式
             self.summed_features_emb = tf.reduce_sum(self.embeddings, 1)  # None * K
             self.summed_features_emb_square = tf.square(self.summed_features_emb)  # None * K
 
@@ -103,6 +114,7 @@ class DeepFM(BaseEstimator, TransformerMixin):
             self.y_second_order = tf.nn.dropout(self.y_second_order, self.dropout_keep_fm[1])  # None * K
 
             # ---------- Deep component ----------
+            # 好,终于到DNN部分了,输入要进行调整
             self.y_deep = tf.reshape(self.embeddings, shape=[-1, self.field_size * self.embedding_size]) # None * (F*K)
             self.y_deep = tf.nn.dropout(self.y_deep, self.dropout_keep_deep[0])
             for i in range(0, len(self.deep_layers)):
@@ -114,6 +126,7 @@ class DeepFM(BaseEstimator, TransformerMixin):
 
             # ---------- DeepFM ----------
             if self.use_fm and self.use_deep:
+                #FM的一阶、二阶,DNN的n阶进行拼接
                 concat_input = tf.concat([self.y_first_order, self.y_second_order, self.y_deep], axis=1)
             elif self.use_fm:
                 concat_input = tf.concat([self.y_first_order, self.y_second_order], axis=1)
@@ -129,10 +142,11 @@ class DeepFM(BaseEstimator, TransformerMixin):
                 self.loss = tf.nn.l2_loss(tf.subtract(self.label, self.out))
             # l2 regularization on weights
             if self.l2_reg > 0:
-                self.loss += tf.contrib.layers.l2_regularizer(
-                    self.l2_reg)(self.weights["concat_projection"])
+                self.loss += tf.contrib.layers.l2_regularizer(self.l2_reg)(self.weights["concat_projection"])
                 if self.use_deep:
+                    #每一层的惩罚在最后做一个累加
                     for i in range(len(self.deep_layers)):
+                        #self.l2_reg是正则化项前面的lambda参数?
                         self.loss += tf.contrib.layers.l2_regularizer(
                             self.l2_reg)(self.weights["layer_%d"%i])
 
@@ -148,9 +162,11 @@ class DeepFM(BaseEstimator, TransformerMixin):
             elif self.optimizer_type == "momentum":
                 self.optimizer = tf.train.MomentumOptimizer(learning_rate=self.learning_rate, momentum=0.95).minimize(
                     self.loss)
+            """
             elif self.optimizer_type == "yellowfin":
                 self.optimizer = YFOptimizer(learning_rate=self.learning_rate, momentum=0.0).minimize(
                     self.loss)
+            """
 
             # init
             self.saver = tf.train.Saver()
@@ -171,30 +187,51 @@ class DeepFM(BaseEstimator, TransformerMixin):
 
 
     def _init_session(self):
-        config = tf.ConfigProto(device_count={"gpu": 0})
+        """
+        ConfigProto可以配置类似并行的线程数,GPU分配策略,运算超时时间等参数.最常使用的有两个:
+        - allow_soft_placement,默认为False,当它为True时在以下任意一个条件成立时,GPU上的运算可以放到CPU上进行:
+        1).运算无法在GPU上进行;2).没有GPU资源;3)运算输入包含对CPU计算结果的引用;
+        - log_device_placement, 略
+        """
+        config = tf.ConfigProto(device_count={"gpu": 0}, allow_soft_placement=True)
         config.gpu_options.allow_growth = True
+
+        # 这里缺少一段checkpoint的逻辑,不然中断后每次都要重新训练 
         return tf.Session(config=config)
 
 
     def _initialize_weights(self):
         weights = dict()
 
-        # embeddings
+        # embeddings,嵌入层的权重系数,有F * K个
+        # embeddings应该就是传说中的k吧,随机初始化服从标准正太分布(均值为0,方差为1)的权重
         weights["feature_embeddings"] = tf.Variable(
             tf.random_normal([self.feature_size, self.embedding_size], 0.0, 0.01),
             name="feature_embeddings")  # feature_size * K
+
+        # 这里是fm一次项的权重W,注意fm是由一次项和二次项相加,一次项当然权重系数就是F个
+        # 这里初始化用的是0.0~1.0之间的均匀分布
         weights["feature_bias"] = tf.Variable(
             tf.random_uniform([self.feature_size, 1], 0.0, 1.0), name="feature_bias")  # feature_size * 1
 
-        # deep layers
-        num_layer = len(self.deep_layers)
+        # deep layers, 输入参数为[32,32],什么意思?
+        # 应该是说总共两个隐层,每个隐层都是32个神经元
+        num_layer = len(self.deep_layers) 
+
+        # 是fm和dnn共享embedding,下面是embedding的节点数量,等于M * K
         input_size = self.field_size * self.embedding_size
-        glorot = np.sqrt(2.0 / (input_size + self.deep_layers[0]))
+
+        glorot = np.sqrt(2.0 / (input_size + self.deep_layers[0])) #什么东东?
+        # loc为概率分布的均值,而scale为概率分布的标准差
+        # 下面是初始化第0层的权重系数,单从DNN的角度来说就是从输入到第一隐层的权重系数
         weights["layer_0"] = tf.Variable(
             np.random.normal(loc=0, scale=glorot, size=(input_size, self.deep_layers[0])), dtype=np.float32)
-        weights["bias_0"] = tf.Variable(np.random.normal(loc=0, scale=glorot, size=(1, self.deep_layers[0])),
-                                                        dtype=np.float32)  # 1 * layers[0]
+        weights["bias_0"] = tf.Variable(
+            np.random.normal(loc=0, scale=glorot, size=(1, self.deep_layers[0])),
+            dtype=np.float32)  # 1 * layers[0]
+
         for i in range(1, num_layer):
+            # 这个标准差这样设置是几个意思?
             glorot = np.sqrt(2.0 / (self.deep_layers[i-1] + self.deep_layers[i]))
             weights["layer_%d" % i] = tf.Variable(
                 np.random.normal(loc=0, scale=glorot, size=(self.deep_layers[i-1], self.deep_layers[i])),
@@ -204,12 +241,14 @@ class DeepFM(BaseEstimator, TransformerMixin):
                 dtype=np.float32)  # 1 * layer[i]
 
         # final concat projection layer
+        # 最终的y = wx+b,这个结果要送入sigmoid,没有看懂为啥input_size是这样子的?
         if self.use_fm and self.use_deep:
             input_size = self.field_size + self.embedding_size + self.deep_layers[-1]
         elif self.use_fm:
             input_size = self.field_size + self.embedding_size
         elif self.use_deep:
             input_size = self.deep_layers[-1]
+
         glorot = np.sqrt(2.0 / (input_size + 1))
         weights["concat_projection"] = tf.Variable(
                         np.random.normal(loc=0, scale=glorot, size=(input_size, 1)),
@@ -252,6 +291,7 @@ class DeepFM(BaseEstimator, TransformerMixin):
                      self.dropout_keep_fm: self.dropout_fm,
                      self.dropout_keep_deep: self.dropout_deep,
                      self.train_phase: True}
+        #啦啦啦,开始训练啦
         loss, opt = self.sess.run((self.loss, self.optimizer), feed_dict=feed_dict)
         return loss
 
@@ -277,9 +317,11 @@ class DeepFM(BaseEstimator, TransformerMixin):
         for epoch in range(self.epoch):
             t1 = time()
             self.shuffle_in_unison_scary(Xi_train, Xv_train, y_train)
+            #计算一个epoch有多少个batch
             total_batch = int(len(y_train) / self.batch_size)
             for i in range(total_batch):
                 Xi_batch, Xv_batch, y_batch = self.get_batch(Xi_train, Xv_train, y_train, self.batch_size, i)
+                #这应该不是异步的吧
                 self.fit_on_batch(Xi_batch, Xv_batch, y_batch)
 
             # evaluate training and validation datasets

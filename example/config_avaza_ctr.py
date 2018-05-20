@@ -1,9 +1,9 @@
 
 # set the path-to-files
-TRAIN_FILE = "/data/avaza-ctr-2015/train.csv"
-TEST_FILE = "/data/avaza-ctr-2015/test.csv"
+TRAIN_FILE = "/data/ChuiGeDaQiQiu/avaza-ctr-2015/train.csv"
+TEST_FILE = "/data/ChuiGeDaQiQiu/avaza-ctr-2015/test.csv"
 
-SUB_DIR = "/data/avaza-ctr-2015/data"
+SUB_DIR = "/data/ChuiGeDaQiQiu/avaza-ctr-2015"
 
 
 NUM_SPLITS = 3
